@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"math"
 	"regexp"
 	"strings"
 	"unicode"
@@ -83,52 +84,74 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// GetLetters returns all letters from the specified folder
+// GetLetters returns all new letters from the specified folder, where letter.uid > uid
 //
 // Valid folders: Drafts, INBOX, Outbox, Sent, Spam, Trash.
-func (c Client) GetLetters(folder string) ([]model.Letter, error) {
+func (c Client) GetNewLetters(folder string, uid uint32) ([]model.Letter, error) {
 	var letters []model.Letter
 
-	mailbox, err := c.client.Select(folder, nil).Wait()
-	if err != nil {
-		return nil, fmt.Errorf("failed to select folder %s: %v", folder, err)
-	}
-	if mailbox.NumMessages == 0 {
-		return nil, nil
-	}
-
-	seqSet := imap.SeqSet{}
-	seqSet.AddRange(1, mailbox.NumMessages)
-	options := &imap.FetchOptions{
-		Envelope:      true,
-		BodySection:   []*imap.FetchItemBodySection{{}},
-		BodyStructure: &imap.FetchItemBodyStructure{},
-	}
-
-	messages, err := c.client.Fetch(seqSet, options).Collect()
+	messages, err := c.fetchMessages(folder, uid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch messages from %s", folder)
 	}
 
 	var extractErr error
-	for i := range messages {
-		body, err := getLetterBody(messages[i])
+	for _, msg := range messages {
+		body, err := getMessageBody(msg)
 		if err != nil {
 			extractErr = err
 			continue
 		}
 		if body != "" {
 			letters = append(letters, model.Letter{
-				Envelope: messages[i].Envelope,
-				Body:     body,
+				Envelope: model.Envelope{
+					Date:    msg.Envelope.Date,
+					Subject: msg.Envelope.Subject,
+					From:    msg.Envelope.From,
+					UID:     uint32(msg.UID),
+				},
+				Body: body,
 			})
 		}
 	}
 	return letters, extractErr
 }
 
-// getLetterBody extracts and returns text/plain data from an IMAP message
-func getLetterBody(message *imapclient.FetchMessageBuffer) (string, error) {
+// fetchMessages returns IMAP messages from the specified folder, where letter.uid > uid
+func (c Client) fetchMessages(folder string, uid uint32) ([]*imapclient.FetchMessageBuffer, error) {
+	mailbox, err := c.client.Select(folder, nil).Wait()
+	if err != nil {
+		return nil, err
+	}
+	if mailbox.NumMessages == 0 {
+		return nil, nil
+	}
+
+	options := &imap.FetchOptions{
+		Envelope:    true,
+		UID:         true,
+		BodySection: []*imap.FetchItemBodySection{{}},
+	}
+
+	uidSet := imap.UIDSet{}
+	uidSet.AddRange(imap.UID(uid+1), math.MaxUint32)
+	res, err := c.client.UIDSearch(&imap.SearchCriteria{
+		UID: []imap.UIDSet{uidSet},
+	}, nil).Wait()
+
+	if err != nil {
+		return nil, err
+	}
+
+	messages, err := c.client.Fetch(res.All, options).Collect()
+	if err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+// getMessageBody extracts and returns text/plain data from an IMAP message
+func getMessageBody(message *imapclient.FetchMessageBuffer) (string, error) {
 	body := message.FindBodySection(&imap.FetchItemBodySection{})
 	mr, err := mail.CreateReader(bytes.NewReader(body))
 	if err != nil {
@@ -163,7 +186,14 @@ func cleanPlainText(raw string) string {
 func removeNotPrintable(text string) string {
 	var builder strings.Builder
 	for _, char := range text {
-		if unicode.IsLetter(char) || unicode.IsDigit(char) || unicode.IsSpace(char) {
+		if unicode.IsControl(char) {
+			continue
+		}
+		if unicode.IsLetter(char) ||
+			unicode.IsDigit(char) ||
+			unicode.IsSpace(char) ||
+			unicode.IsPunct(char) {
+
 			builder.WriteRune(char)
 		}
 	}

@@ -14,9 +14,9 @@ func main() {
 	}
 	defer c.Close()
 
-	letters, _ := c.GetLetters("INBOX")
+	letters, _ := c.GetNewLetters("INBOX", 29)
 	fmt.Println(len(letters))
 	for i := range letters {
-		fmt.Println(i, " ", len(letters[i].Body))
+		fmt.Println(i, " ", letters[i].Body)
 	}
 }
