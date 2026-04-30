@@ -17,6 +17,6 @@ func main() {
 	letters, _ := c.GetLetters("INBOX")
 	fmt.Println(len(letters))
 	for i := range letters {
-		fmt.Println(i, "\n", len(letters[i].Body))
+		fmt.Println(i, " ", len(letters[i].Body))
 	}
 }

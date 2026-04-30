@@ -6,14 +6,19 @@ import (
 	"html"
 	"io"
 	"regexp"
-
 	"strings"
+	"unicode"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-message/mail"
 
 	"mail-assistant/internal/model"
+)
+
+var (
+	reText = regexp.MustCompile(`https?://\S+|\[\s*\d+\s*\]|\?utm_[a-z_]+=[^&\s]+&?`)
+	reHtml = regexp.MustCompile(`(?s)<(style|script)[^>]*>.*?</(style|script)>|<[^>]*>`)
 )
 
 type Client struct {
@@ -52,7 +57,7 @@ func (c *Client) Connect(address, email, password string) error {
 	return nil
 }
 
-// Connect connects to the IMAP server by XOAUTH2
+// ConnectByXOAUTH2 connects to the IMAP server by XOAUTH2
 func (c *Client) ConnectByXOAUTH2(address, email, token string) error {
 	cl, err := imapclient.DialTLS(address, nil)
 	if err != nil {
@@ -105,24 +110,24 @@ func (c Client) GetLetters(folder string) ([]model.Letter, error) {
 		return nil, fmt.Errorf("failed to fetch messages from %s", folder)
 	}
 
-	var messageErr error
+	var extractErr error
 	for i := range messages {
 		body, err := getLetterBody(messages[i])
 		if err != nil {
-			messageErr = err
+			extractErr = err
 			continue
 		}
-		if body != "d" {
+		if body != "" {
 			letters = append(letters, model.Letter{
 				Envelope: messages[i].Envelope,
 				Body:     body,
 			})
 		}
 	}
-	return letters, messageErr
+	return letters, extractErr
 }
 
-// getLetterBody extracts and returns text/plain data from a message
+// getLetterBody extracts and returns text/plain data from an IMAP message
 func getLetterBody(message *imapclient.FetchMessageBuffer) (string, error) {
 	body := message.FindBodySection(&imap.FetchItemBodySection{})
 	mr, err := mail.CreateReader(bytes.NewReader(body))
@@ -130,62 +135,45 @@ func getLetterBody(message *imapclient.FetchMessageBuffer) (string, error) {
 		return "", err
 	}
 
-	var (
-		plainText string
-		htmlText  string
-	)
+	var htmlText string
 
-	for {
-		p, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-
+	for p, err := mr.NextPart(); err != io.EOF; p, err = mr.NextPart() {
 		dataType := p.Header.Get("Content-Type")
 
 		switch {
 		case strings.HasPrefix(dataType, "text/plain"):
 			body, _ := io.ReadAll(p.Body)
-			plainText = cleanPlainText(string(body))
+			return cleanPlainText(string(body)), nil
 		case strings.HasPrefix(dataType, "text/html"):
 			body, _ := io.ReadAll(p.Body)
 			htmlText = htmlToText(string(body))
 		}
 	}
-
-	if plainText == "" {
-		return htmlText, nil
-	}
-	return plainText, nil
+	return htmlText, nil
 }
 
 // cleanPlainText clears raw string of unnecessary information
 func cleanPlainText(raw string) string {
-	// delete refs and counters
-	re := regexp.MustCompile(`https?://\S+|\[\s*\d+\s*\]`)
-	text := re.ReplaceAllString(raw, "")
-	// delete utm
-	text = regexp.MustCompile(`\?utm_[a-z_]+=[^&\s]+&?`).ReplaceAllString(text, "")
-	// many gaps to one
-	return strings.Join(strings.Fields(text), " ")
+	text := reText.ReplaceAllString(raw, " ")
+	text = removeNotPrintable(text)
+	text = strings.Join(strings.Fields(text), " ")
+	return text
+}
+
+func removeNotPrintable(text string) string {
+	var builder strings.Builder
+	for _, char := range text {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) || unicode.IsSpace(char) {
+			builder.WriteRune(char)
+		}
+	}
+	return builder.String()
 }
 
 // htmlToText converts HTML to plain text
 func htmlToText(htmlText string) string {
-	// remove css in style <style>...</style>
-	reStyle := regexp.MustCompile(`(?s)<style[^>]*>.*?</style>`)
-	text := reStyle.ReplaceAllString(htmlText, " ")
-	// remove JavaScript code <script>...</script>
-	reScript := regexp.MustCompile(`(?s)<script[^>]*>.*?</script>`)
-	text = reScript.ReplaceAllString(text, " ")
-	// remove html tags
-	reTag := regexp.MustCompile(`<[^>]*>`)
-	text = reTag.ReplaceAllString(text, " ")
-
+	text := reHtml.ReplaceAllString(htmlText, " ")
 	text = html.UnescapeString(text)
-	text = strings.Join(strings.Fields(text), " ")
+	text = cleanPlainText(text)
 	return text
 }
