@@ -1,4 +1,4 @@
-package client
+package imap
 
 import (
 	"bytes"
@@ -13,8 +13,6 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-message/mail"
-
-	"mail-assistant/internal/model"
 )
 
 var (
@@ -49,10 +47,10 @@ func (c *clientXOAUTH2) Next(challenge []byte) (response []byte, err error) {
 func (c *Client) Connect(address, email, password string) error {
 	cl, err := imapclient.DialTLS(address, nil)
 	if err != nil {
-		return fmt.Errorf("failed to dial IMAP server: %v", err)
+		return fmt.Errorf("failed to dial IMAP server: %w", err)
 	}
 	if err := cl.Login(email, password).Wait(); err != nil {
-		return fmt.Errorf("failed to login: %v", err)
+		return fmt.Errorf("failed to login: %w", err)
 	}
 	c.client = cl
 	return nil
@@ -62,24 +60,24 @@ func (c *Client) Connect(address, email, password string) error {
 func (c *Client) ConnectByXOAUTH2(address, email, token string) error {
 	cl, err := imapclient.DialTLS(address, nil)
 	if err != nil {
-		return fmt.Errorf("failed to dial IMAP server: %v", err)
+		return fmt.Errorf("failed to dial IMAP server: %w", err)
 	}
 	authClient := &clientXOAUTH2{
 		email: email,
 		token: token,
 	}
 	if err := cl.Authenticate(authClient); err != nil {
-		return fmt.Errorf("failed to authenticate: %v", err)
+		return fmt.Errorf("failed to authenticate: %w", err)
 	}
 	c.client = cl
 	return nil
 }
 
 // Close closes the connection to the IMAP server
-func (c *Client) Close() error {
+func (c Client) Close() error {
 	err := c.client.Close()
 	if err != nil {
-		return fmt.Errorf("failed to close IMAP server connection: %v", err)
+		return fmt.Errorf("failed to close IMAP server connection: %w", err)
 	}
 	return nil
 }
@@ -87,8 +85,8 @@ func (c *Client) Close() error {
 // GetLetters returns all new letters from the specified folder, where letter.uid > uid
 //
 // Valid folders: Drafts, INBOX, Outbox, Sent, Spam, Trash.
-func (c Client) GetNewLetters(folder string, uid uint32) ([]model.Letter, error) {
-	var letters []model.Letter
+func (c Client) GetNewLetters(folder string, uid uint32) ([]Letter, error) {
+	var letters []Letter
 
 	messages, err := c.fetchMessages(folder, uid)
 	if err != nil {
@@ -103,8 +101,8 @@ func (c Client) GetNewLetters(folder string, uid uint32) ([]model.Letter, error)
 			continue
 		}
 		if body != "" {
-			letters = append(letters, model.Letter{
-				Envelope: model.Envelope{
+			letters = append(letters, Letter{
+				Envelope: Envelope{
 					Date:    msg.Envelope.Date,
 					Subject: msg.Envelope.Subject,
 					From:    msg.Envelope.From,
