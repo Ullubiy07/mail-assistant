@@ -10,7 +10,8 @@ import (
 type Embedding struct {
 	TokenAuthURL string `env:"TOKEN_AUTH_URL"`
 	TokenAuthKey string `env:"TOKEN_AUTH_KEY"`
-	EmbeddingURL string `env:"EMBEDDING_URL"`
+	HandleURL    string `env:"EMBEDDING_HANDLE_URL"`
+	HttpTimeout  int    `env:"EMBEDDING_HTTP_TIMEOUT"`
 }
 
 type IMAP struct {

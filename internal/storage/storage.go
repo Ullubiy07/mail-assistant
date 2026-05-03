@@ -12,6 +12,7 @@ type Point struct {
 
 type VectorStore interface {
 	CreateCollection(ctx context.Context, collName string) error
+	DeleteCollection(ctx context.Context, collName string) error
 	Upsert(ctx context.Context, collName string, points []Point) error
-	Query(ctx context.Context, collName string, embedding embed.Embedding)
+	Search(ctx context.Context, collName string, embedding embed.Embedding)
 }

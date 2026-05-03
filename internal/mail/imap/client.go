@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log/slog"
 	"mail-assistant/internal/config"
 	"net"
 	"regexp"
@@ -33,13 +32,6 @@ var (
 	reHtml = regexp.MustCompile(`(?s)<(style|script)[^>]*>.*?</(style|script)>|<[^>]*>`)
 )
 
-type Creds struct {
-	address  string
-	email    string
-	password string
-	token    string
-}
-
 type Client struct {
 	client *imapclient.Client
 	cfg    *config.IMAP
@@ -48,9 +40,21 @@ type Client struct {
 	method ConnectMethod
 }
 
+type Creds struct {
+	address  string
+	email    string
+	password string
+	token    string
+}
+
 type clientXOAUTH2 struct {
 	email string
 	token string
+}
+
+type fetchMessageResponse struct {
+	folderState *mail.FolderState
+	buffer      []*imapclient.FetchMessageBuffer
 }
 
 func New(cfg *config.IMAP, method ConnectMethod, address, email, password, token string) Client {
@@ -62,47 +66,47 @@ func New(cfg *config.IMAP, method ConnectMethod, address, email, password, token
 	}, method}
 }
 
-func (c *Client) connect(ctx context.Context) error {
+func (c *Client) connect() error {
 	switch c.method {
 	case XOAUTH2:
-		return c.connectByXOAUTH2(ctx)
+		return c.connectByXOAUTH2()
 	case PLAIN:
-		return c.connectByPassword(ctx)
+		return c.connectByPassword()
 	}
 	return fmt.Errorf("unsupported connection method")
 }
 
-func (c *Client) connectByPassword(ctx context.Context) error {
+func (c *Client) connectByPassword() error {
 	cl, err := imapclient.DialTLS(c.creds.address, &imapclient.Options{
 		Dialer: &net.Dialer{
 			Timeout: time.Duration(c.cfg.DialTimeout) * time.Second,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to dial IMAP server: %w", err)
+		return fmt.Errorf("dial IMAP server: %w", err)
 	}
 	if err := cl.Login(c.creds.email, c.creds.password).Wait(); err != nil {
-		return fmt.Errorf("failed to login: %w", err)
+		return fmt.Errorf("login attempt: %w", err)
 	}
 	c.client = cl
 	return nil
 }
 
-func (c *Client) connectByXOAUTH2(ctx context.Context) error {
+func (c *Client) connectByXOAUTH2() error {
 	cl, err := imapclient.DialTLS(c.creds.address, &imapclient.Options{
 		Dialer: &net.Dialer{
 			Timeout: time.Duration(c.cfg.DialTimeout) * time.Second,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to connect IMAP server: %w", err)
+		return fmt.Errorf("dial IMAP server: %w", err)
 	}
 	authClient := &clientXOAUTH2{
 		email: c.creds.email,
 		token: c.creds.token,
 	}
 	if err := cl.Authenticate(authClient); err != nil {
-		return fmt.Errorf("failed to authenticate: %w", err)
+		return fmt.Errorf("authentication attempt: %w", err)
 	}
 	c.client = cl
 	return nil
@@ -125,27 +129,42 @@ func (c *clientXOAUTH2) Next(challenge []byte) (response []byte, err error) {
 	return nil, nil
 }
 
-// for development
-func (c Client) AuthMechanisms() ([]string, error) {
+func (c Client) AuthMechanisms(ctx context.Context) ([]string, error) {
 	cl, err := imapclient.DialTLS(c.creds.address, &imapclient.Options{
 		Dialer: &net.Dialer{
 			Timeout: time.Duration(c.cfg.DialTimeout) * time.Second,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect IMAP server: %w", err)
+		return nil, fmt.Errorf("dial IMAP server: %w", err)
 	}
-	cap, err := cl.Capability().Wait()
-	if err != nil {
-		return nil, fmt.Errorf("capability command failed: %w", err)
+	defer cl.Close()
+
+	resultCh := make(chan []string, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		cap, err := cl.Capability().Wait()
+		if err != nil {
+			errCh <- fmt.Errorf("capability command: %w", err)
+			return
+		}
+		resultCh <- cap.AuthMechanisms()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case mech := <-resultCh:
+		return mech, nil
+	case err := <-errCh:
+		return nil, err
 	}
-	res := cap.AuthMechanisms()
-	return res, nil
 }
 
 func (c Client) GetFolders(ctx context.Context) ([]string, error) {
-	if err := c.connect(ctx); err != nil {
-		return nil, nil
+	if err := c.connect(); err != nil {
+		return nil, fmt.Errorf("connect to IMAP: %w", err)
 	}
 	defer c.close()
 
@@ -158,7 +177,7 @@ func (c Client) GetFolders(ctx context.Context) ([]string, error) {
 
 		data, err := cmd.Collect()
 		if err != nil {
-			errCh <- err
+			errCh <- fmt.Errorf("collect command: %w", err)
 			return
 		}
 		result := make([]string, 0, len(data))
@@ -178,24 +197,28 @@ func (c Client) GetFolders(ctx context.Context) ([]string, error) {
 	}
 }
 
-func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([]mail.Letter, error) {
-	var letters []mail.Letter
+func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([]mail.Letter, *mail.FolderState, error) {
+	if err := c.connect(); err != nil {
+		return nil, nil, fmt.Errorf("connect to IMAP: %w", err)
+	}
+	defer c.close()
 
-	messages, err := c.fetchMessages(ctx, folder, uid)
+	var letters []mail.Letter
+	response, err := c.fetchMessages(ctx, folder, uid)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch messages from %s: %w", folder, err)
+		return nil, nil, fmt.Errorf("fetch messages from %s: %w", folder, err)
 	}
 
 	var extractErr error
-	for _, msg := range messages {
-		// if len(msg.Envelope.From) != 0 &&
-		// 	msg.Envelope.From[0].Mailbox == "noreply" ||
-		// 	msg.Envelope.From[0].Mailbox == "devnull" {
-		// 	continue
-		// }
+
+	for _, msg := range response.buffer {
+		if len(msg.Envelope.From) != 0 && inBlackList(msg.Envelope.From[0].Mailbox) {
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
-			return letters, extractErr
+			return letters, response.folderState, extractErr
 		default:
 		}
 
@@ -228,32 +251,18 @@ func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([
 		})
 	}
 
-	if extractErr != nil {
-		slog.WarnContext(ctx, "partial failure during extraction",
-			"provider", "IMAP",
-			"messages", len(messages),
-			"extracted", len(letters),
-			"folder", folder,
-			"err", extractErr)
-	}
-
-	return letters, extractErr
+	return letters, response.folderState, nil
 }
 
 // fetchMessages returns IMAP messages from the specified folder, where letter.uid > uid
-func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) ([]*imapclient.FetchMessageBuffer, error) {
-	if err := c.connect(ctx); err != nil {
-		return nil, err
-	}
-	defer c.close()
-
-	resultCh := make(chan []*imapclient.FetchMessageBuffer, 1)
+func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) (*fetchMessageResponse, error) {
+	resultCh := make(chan *fetchMessageResponse, 1)
 	errCh := make(chan error, 1)
 
 	go func() {
 		mailbox, err := c.client.Select(folder, nil).Wait()
 		if err != nil {
-			errCh <- err
+			errCh <- fmt.Errorf("select command: %w", err)
 			return
 		}
 		if mailbox.NumMessages == 0 {
@@ -262,7 +271,7 @@ func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) ([
 		}
 
 		uidSet := imap.UIDSet{}
-		uidSet.AddRange(imap.UID(uid+1), imap.UID(mailbox.NumMessages))
+		uidSet.AddRange(imap.UID(uid), imap.UID(mailbox.UIDNext))
 
 		messages, err := c.client.Fetch(uidSet, &imap.FetchOptions{
 			Envelope:    true,
@@ -271,10 +280,14 @@ func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) ([
 		}).Collect()
 
 		if err != nil {
-			errCh <- err
+			errCh <- fmt.Errorf("fetch command: %w", err)
 			return
 		}
-		resultCh <- messages
+		resultCh <- &fetchMessageResponse{&mail.FolderState{
+			Folder:      folder,
+			UIDNext:     uint32(mailbox.UIDNext),
+			UIDValidity: mailbox.UIDValidity,
+		}, messages}
 	}()
 
 	select {
@@ -292,7 +305,7 @@ func getMessageBody(message *imapclient.FetchMessageBuffer) (string, error) {
 	body := message.FindBodySection(&imap.FetchItemBodySection{})
 	mr, err := imapmail.CreateReader(bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create reader: %w", err)
 	}
 
 	var htmlText string
@@ -343,4 +356,11 @@ func htmlToText(htmlText string) string {
 	text = html.UnescapeString(text)
 	text = cleanPlainText(text)
 	return text
+}
+
+func inBlackList(mailbox string) bool {
+	return strings.Contains(mailbox, "noreply") ||
+		strings.Contains(mailbox, "no-reply") ||
+		strings.Contains(mailbox, "devnull") ||
+		strings.Contains(mailbox, "robot")
 }

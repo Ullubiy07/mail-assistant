@@ -1,12 +1,10 @@
 package gigachat
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -15,10 +13,11 @@ import (
 
 	"mail-assistant/internal/config"
 	"mail-assistant/internal/embed"
+	"mail-assistant/internal/network"
 )
 
 type Client struct {
-	client *http.Client
+	client *network.Client
 	cfg    *config.Embedding
 
 	mu             sync.Mutex
@@ -27,13 +26,11 @@ type Client struct {
 }
 
 func New(cfg *config.Embedding) *Client {
-	httpClient := &http.Client{
-		Transport: &loggingWrapper{
-			tripper: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
+	httpClient := network.New(time.Duration(cfg.HttpTimeout)*time.Second, &loggingWrapper{
+		tripper: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
-	}
+	})
 	return &Client{
 		cfg:    cfg,
 		client: httpClient,
@@ -43,24 +40,24 @@ func New(cfg *config.Embedding) *Client {
 func (c *Client) Embed(ctx context.Context, chunks []embed.Chunk) ([]embed.Embedding, error) {
 	body, err := json.Marshal(embeddingRequest{"Embeddings", chunks})
 	if err != nil {
-		return nil, fmt.Errorf("failed to serialize data: %w", err)
+		return nil, fmt.Errorf("serialize data: %w", err)
 	}
 
 	if err = c.updateAccessToken(ctx); err != nil {
-		return nil, fmt.Errorf("failed to update access token: %w", err)
+		return nil, fmt.Errorf("update access token: %w", err)
 	}
 
-	res, err := c.postRequest(ctx, body, c.cfg.EmbeddingURL, map[string]string{
+	res, err := c.client.PostRequest(ctx, body, c.cfg.HandleURL, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer " + c.AccessToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("http request failed: %w", err)
+		return nil, fmt.Errorf("http POST request: %w", err)
 	}
 
 	resp := embeddingResponse{}
 	if err = json.Unmarshal(res, &resp); err != nil {
-		return nil, fmt.Errorf("failed to unserialize the response: %w", err)
+		return nil, fmt.Errorf("unserialize the response: %w", err)
 	}
 
 	result := make([]embed.Embedding, 0, len(resp.Data))
@@ -84,51 +81,22 @@ func (c *Client) updateAccessToken(ctx context.Context) error {
 	}
 
 	data := []byte("scope=GIGACHAT_API_PERS")
-	res, err := c.postRequest(ctx, data, c.cfg.TokenAuthURL, map[string]string{
+	res, err := c.client.PostRequest(ctx, data, c.cfg.TokenAuthURL, map[string]string{
 		"Content-Type":  "application/x-www-form-urlencoded",
 		"Accept":        "application/json",
 		"RqUID":         uuid.NewString(),
 		"Authorization": "Basic " + c.cfg.TokenAuthKey,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("http POST request: %w", err)
 	}
 
 	resp := tokenResponse{}
 	if err = json.Unmarshal(res, &resp); err != nil {
-		return err
+		return fmt.Errorf("unmarshal http response: %w", err)
 	}
 	c.AccessToken = resp.AccessToken
 	c.tokenExpiresAt = time.Unix(int64(resp.ExpiresAt), 0)
 
 	return nil
-}
-
-func (c *Client) postRequest(ctx context.Context, data []byte, URL string, header map[string]string) ([]byte, error) {
-	reader := bytes.NewReader(data)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, URL, reader)
-	if err != nil {
-		return nil, err
-	}
-
-	for key, value := range header {
-		req.Header.Set(key, value)
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get access token, status: %d, %s", resp.StatusCode, string(body))
-	}
-
-	return body, nil
 }
