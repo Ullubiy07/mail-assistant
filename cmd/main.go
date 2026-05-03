@@ -1,41 +1,48 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log/slog"
-	"mail-assistant/internal/config"
-	"mail-assistant/internal/embedding"
-	"mail-assistant/internal/embedding/gigachat"
 	"os"
+	"time"
 
-	"github.com/Marlliton/slogpretty"
+	"github.com/google/uuid"
+
+	"mail-assistant/internal/config"
+	"mail-assistant/internal/log"
+	"mail-assistant/internal/storage/qdrant"
 )
 
-func main() {
-	logger := slog.New(slogpretty.New(os.Stdout, &slogpretty.Options{
-		Level:      slog.LevelDebug,
-		AddSource:  false,
-		Colorful:   true,
-		Multiline:  true,
-		TimeFormat: "[02.01.06 15:04:05]",
-	}))
-	slog.SetDefault(logger)
+type TraceHandler struct {
+	slog.Handler
+}
 
-	c, err := config.New()
+func (t *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
+	if id, ok := ctx.Value("trace_id").(string); ok {
+		r.AddAttrs(slog.String("trace_id", id))
+	}
+	return t.Handler.Handle(ctx, r)
+}
+
+func main() {
+	cfg, err := config.New()
 	if err != nil {
 		slog.Error("[Config] failed to load config", "err", err)
 		os.Exit(1)
 	}
 
-	emb := gigachat.New(
-		c.TokenAuthURL,
-		c.EmbeddingURL,
-		c.TokenAuthKey,
-	)
-	res, err := emb.Get([]embedding.Chunk{"Hello", "DAmn"})
-	if err != nil {
-		slog.Error(err.Error())
+	logger := log.New(cfg.Log.Mode)
+	slog.SetDefault(logger)
+
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, "trace_id", uuid.NewString())
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	q := qdrant.New(&cfg.Qdrant)
+	q.Connect()
+	if err = q.CreateCollection(ctx, "f"); err != nil {
+		slog.Error("qdrant", "err", err)
 		os.Exit(1)
 	}
-	fmt.Println(len(res))
 }

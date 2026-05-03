@@ -13,14 +13,16 @@ type loggingWrapper struct {
 func (w *loggingWrapper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	start := time.Now()
+	ctx := req.Context()
 
 	resp, err := w.tripper.RoundTrip(req)
 
-	slog.Info("[GigaChat]",
-		"duration", time.Since(start).Round(time.Millisecond),
+	slog.InfoContext(ctx, "HTTP Request",
+		"provider", "GigaChat",
 		"url", req.URL.String(),
 		"method", req.Method,
-		"error", nil,
+		"duration", time.Since(start).Round(time.Millisecond),
+		"error", err,
 	)
 
 	return resp, err

@@ -1,13 +1,10 @@
 package gigachat
 
-import "mail-assistant/internal/embedding"
-
-type Embedding = embedding.Embedding
-type Chunk = embedding.Chunk
+import "mail-assistant/internal/embed"
 
 type embeddingRequest struct {
-	Model string  `json:"model"`
-	Input []Chunk `json:"input"`
+	Model string        `json:"model"`
+	Input []embed.Chunk `json:"input"`
 }
 
 type embeddingResponse struct {
@@ -22,10 +19,10 @@ type tokenResponse struct {
 }
 
 type embeddingItem struct {
-	Object    string    `json:"object"`
-	Index     int       `json:"index"`
-	Embedding Embedding `json:"embedding"`
-	Usage     usage     `json:"usage"`
+	Object    string          `json:"object"`
+	Index     int             `json:"index"`
+	Embedding embed.Embedding `json:"embedding"`
+	Usage     usage           `json:"usage"`
 }
 
 type usage struct {
