@@ -15,8 +15,8 @@ type Embedding struct {
 }
 
 type IMAP struct {
-	CharsLimit  int `env:"CHARS_LIMIT"`
-	DialTimeout int `env:"DIAL_TIMEOUT"`
+	LetterCharsLimit int `env:"LETTER_CHARS_LIMIT"`
+	DialTimeout      int `env:"DIAL_TIMEOUT"`
 }
 
 type Qdrant struct {
@@ -30,11 +30,29 @@ type Log struct {
 	Mode string `env:"MODE"`
 }
 
+type App struct {
+	ServerPort string `env:"SERVER_PORT"`
+	Database   Database
+	Token      Token
+}
+
+type Token struct {
+	SecretKey string `env:"JWT_SECRET_KEY"`
+}
+
+type Database struct {
+	Host     string `env:"POSTGRES_HOST"`
+	Port     int    `env:"POSTGRES_PORT"`
+	User     string `env:"POSTGRES_USER"`
+	Password string `env:"POSTGRES_PASSWORD"`
+}
+
 type Config struct {
 	Embedding Embedding
 	IMAP      IMAP
 	Qdrant    Qdrant
 	Log       Log
+	App       App
 }
 
 func New() (*Config, error) {

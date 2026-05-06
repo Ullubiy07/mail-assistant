@@ -20,8 +20,8 @@ const (
 )
 
 func (t *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
-	if id, ok := ctx.Value("trace_id").(string); ok {
-		r.AddAttrs(slog.String("trace_id", id))
+	if id, ok := ctx.Value("request_id").(string); ok {
+		r.AddAttrs(slog.String("request_id", id))
 	}
 	return t.Handler.Handle(ctx, r)
 }

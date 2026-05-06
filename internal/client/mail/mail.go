@@ -30,6 +30,6 @@ type FolderState struct {
 }
 
 type Reader interface {
-	GetNewLetters(ctx context.Context, folder string, uid uint32) ([]Letter, *FolderState, error)
+	GetNewLetters(ctx context.Context, folder string, uid uint32) ([]Letter, FolderState, error)
 	GetFolders(ctx context.Context) ([]string, error)
 }

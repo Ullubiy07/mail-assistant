@@ -1,6 +1,6 @@
 package gigachat
 
-import "mail-assistant/internal/embed"
+import "mail-assistant/internal/client/embed"
 
 type embeddingRequest struct {
 	Model string        `json:"model"`

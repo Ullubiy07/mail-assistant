@@ -17,7 +17,7 @@ import (
 	"github.com/emersion/go-imap/v2/imapclient"
 	imapmail "github.com/emersion/go-message/mail"
 
-	"mail-assistant/internal/mail"
+	"mail-assistant/internal/client/mail"
 )
 
 type ConnectMethod = string
@@ -53,7 +53,7 @@ type clientXOAUTH2 struct {
 }
 
 type fetchMessageResponse struct {
-	folderState *mail.FolderState
+	folderState mail.FolderState
 	buffer      []*imapclient.FetchMessageBuffer
 }
 
@@ -197,16 +197,16 @@ func (c Client) GetFolders(ctx context.Context) ([]string, error) {
 	}
 }
 
-func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([]mail.Letter, *mail.FolderState, error) {
+func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([]mail.Letter, mail.FolderState, error) {
 	if err := c.connect(); err != nil {
-		return nil, nil, fmt.Errorf("connect to IMAP: %w", err)
+		return nil, mail.FolderState{}, fmt.Errorf("connect to IMAP: %w", err)
 	}
 	defer c.close()
 
 	var letters []mail.Letter
 	response, err := c.fetchMessages(ctx, folder, uid)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetch messages from %s: %w", folder, err)
+		return nil, mail.FolderState{}, fmt.Errorf("fetch messages from %s: %w", folder, err)
 	}
 
 	var extractErr error
@@ -227,9 +227,9 @@ func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([
 			extractErr = err
 			continue
 		}
-		if body == "" {
-			continue
-		}
+		// if body == "" {
+		// 	continue
+		// }
 
 		from := mail.Address{}
 		if len(msg.Envelope.From) > 0 {
@@ -247,14 +247,13 @@ func (c Client) GetNewLetters(ctx context.Context, folder string, uid uint32) ([
 				From:    from,
 				UID:     uint32(msg.UID),
 			},
-			Body: body,
+			Body: body[:min(len(body), c.cfg.LetterCharsLimit)],
 		})
 	}
-
 	return letters, response.folderState, nil
 }
 
-// fetchMessages returns IMAP messages from the specified folder, where letter.uid > uid
+// fetchMessages returns IMAP messages from the specified folder, where letter.uid >= uid
 func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) (*fetchMessageResponse, error) {
 	resultCh := make(chan *fetchMessageResponse, 1)
 	errCh := make(chan error, 1)
@@ -271,11 +270,11 @@ func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) (*
 		}
 
 		uidSet := imap.UIDSet{}
-		uidSet.AddRange(imap.UID(uid), imap.UID(mailbox.UIDNext))
+		uidSet.AddRange(imap.UID(uid), 0)
 
 		messages, err := c.client.Fetch(uidSet, &imap.FetchOptions{
-			Envelope:    true,
-			UID:         true,
+			Envelope: true,
+			UID:      true,
 			BodySection: []*imap.FetchItemBodySection{{}},
 		}).Collect()
 
@@ -283,7 +282,7 @@ func (c Client) fetchMessages(ctx context.Context, folder string, uid uint32) (*
 			errCh <- fmt.Errorf("fetch command: %w", err)
 			return
 		}
-		resultCh <- &fetchMessageResponse{&mail.FolderState{
+		resultCh <- &fetchMessageResponse{mail.FolderState{
 			Folder:      folder,
 			UIDNext:     uint32(mailbox.UIDNext),
 			UIDValidity: mailbox.UIDValidity,
@@ -310,7 +309,10 @@ func getMessageBody(message *imapclient.FetchMessageBuffer) (string, error) {
 
 	var htmlText string
 
-	for p, err := mr.NextPart(); err != io.EOF; p, err = mr.NextPart() {
+	for p, err := mr.NextPart(); err != io.EOF; {
+		if err != nil {
+			return "", fmt.Errorf("next part: %w", err)
+		}
 		dataType := p.Header.Get("Content-Type")
 
 		switch {
@@ -321,6 +323,7 @@ func getMessageBody(message *imapclient.FetchMessageBuffer) (string, error) {
 			body, _ := io.ReadAll(p.Body)
 			htmlText = htmlToText(string(body))
 		}
+		p, err = mr.NextPart()
 	}
 	return htmlText, nil
 }

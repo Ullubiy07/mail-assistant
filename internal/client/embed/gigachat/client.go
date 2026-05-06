@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"mail-assistant/internal/config"
-	"mail-assistant/internal/embed"
-	"mail-assistant/internal/network"
+	"mail-assistant/internal/client/embed"
+	"mail-assistant/internal/pkg/network"
 )
 
 type Client struct {
@@ -21,7 +21,7 @@ type Client struct {
 	cfg    *config.Embedding
 
 	mu             sync.Mutex
-	AccessToken    string
+	accessToken    string
 	tokenExpiresAt time.Time
 }
 
@@ -49,7 +49,7 @@ func (c *Client) Embed(ctx context.Context, chunks []embed.Chunk) ([]embed.Embed
 
 	res, err := c.client.PostRequest(ctx, body, c.cfg.HandleURL, map[string]string{
 		"Content-Type":  "application/json",
-		"Authorization": "Bearer " + c.AccessToken,
+		"Authorization": "Bearer " + c.accessToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("http POST request: %w", err)
@@ -95,7 +95,7 @@ func (c *Client) updateAccessToken(ctx context.Context) error {
 	if err = json.Unmarshal(res, &resp); err != nil {
 		return fmt.Errorf("unmarshal http response: %w", err)
 	}
-	c.AccessToken = resp.AccessToken
+	c.accessToken = resp.AccessToken
 	c.tokenExpiresAt = time.Unix(int64(resp.ExpiresAt), 0)
 
 	return nil
