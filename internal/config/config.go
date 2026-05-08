@@ -10,19 +10,20 @@ import (
 type Embedding struct {
 	TokenAuthURL string `env:"TOKEN_AUTH_URL"`
 	TokenAuthKey string `env:"TOKEN_AUTH_KEY"`
-	HandleURL    string `env:"EMBEDDING_HANDLE_URL"`
-	HttpTimeout  int    `env:"EMBEDDING_HTTP_TIMEOUT"`
+	Endpoint     string `env:"ENDPOINT"`
 }
 
 type IMAP struct {
-	LetterCharsLimit int `env:"LETTER_CHARS_LIMIT"`
-	DialTimeout      int `env:"DIAL_TIMEOUT"`
+	LetterCharsLimit int    `env:"LETTER_CHARS_LIMIT"`
+	FolderCharsLimit int    `env:"FOLDER_CHARS_LIMIT"`
+	DialTimeout      int    `env:"DIAL_TIMEOUT"`
+	MaxConnections   uint32 `env:"MAX_CONNECTIONS"`
 }
 
 type Qdrant struct {
 	Host          string `env:"QDRANT_HOST"`
 	Port          int    `env:"QDRANT_PORT"`
-	API_KEY       string `env:"QDRANT_API_KEY"`
+	ApiKey        string `env:"QDRANT_API_KEY"`
 	EmbeddingSize int    `env:"EMBEDDING_SIZE"`
 }
 
@@ -32,8 +33,6 @@ type Log struct {
 
 type App struct {
 	ServerPort string `env:"SERVER_PORT"`
-	Database   Database
-	Token      Token
 }
 
 type Token struct {
@@ -53,6 +52,8 @@ type Config struct {
 	Qdrant    Qdrant
 	Log       Log
 	App       App
+	Database  Database
+	Token     Token
 }
 
 func New() (*Config, error) {

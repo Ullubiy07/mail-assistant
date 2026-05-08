@@ -11,33 +11,36 @@ import (
 
 	"github.com/google/uuid"
 
-	"mail-assistant/internal/config"
 	"mail-assistant/internal/client/embed"
+	"mail-assistant/internal/config"
 	"mail-assistant/internal/pkg/network"
 )
 
 type Client struct {
-	client *network.Client
-	cfg    *config.Embedding
-
+	client         network.Client
+	config         config.Embedding
 	mu             sync.Mutex
 	accessToken    string
 	tokenExpiresAt time.Time
 }
 
-func New(cfg *config.Embedding) *Client {
-	httpClient := network.New(time.Duration(cfg.HttpTimeout)*time.Second, &loggingWrapper{
+func New(config config.Embedding) *Client {
+	httpClient := network.New(loggingWrapper{
 		tripper: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	})
 	return &Client{
-		cfg:    cfg,
+		config: config,
 		client: httpClient,
 	}
 }
 
 func (c *Client) Embed(ctx context.Context, chunks []embed.Chunk) ([]embed.Embedding, error) {
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("empty chunks")
+	}
+
 	body, err := json.Marshal(embeddingRequest{"Embeddings", chunks})
 	if err != nil {
 		return nil, fmt.Errorf("serialize data: %w", err)
@@ -47,7 +50,7 @@ func (c *Client) Embed(ctx context.Context, chunks []embed.Chunk) ([]embed.Embed
 		return nil, fmt.Errorf("update access token: %w", err)
 	}
 
-	res, err := c.client.PostRequest(ctx, body, c.cfg.HandleURL, map[string]string{
+	res, err := c.client.PostRequest(ctx, body, c.config.Endpoint, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer " + c.accessToken,
 	})
@@ -60,9 +63,9 @@ func (c *Client) Embed(ctx context.Context, chunks []embed.Chunk) ([]embed.Embed
 		return nil, fmt.Errorf("unserialize the response: %w", err)
 	}
 
-	result := make([]embed.Embedding, 0, len(resp.Data))
-	for _, item := range resp.Data {
-		result = append(result, item.Embedding)
+	result := make([]embed.Embedding, len(resp.Data))
+	for i, item := range resp.Data {
+		result[i] = item.Embedding
 	}
 
 	return result, nil
@@ -81,11 +84,11 @@ func (c *Client) updateAccessToken(ctx context.Context) error {
 	}
 
 	data := []byte("scope=GIGACHAT_API_PERS")
-	res, err := c.client.PostRequest(ctx, data, c.cfg.TokenAuthURL, map[string]string{
+	res, err := c.client.PostRequest(ctx, data, c.config.TokenAuthURL, map[string]string{
 		"Content-Type":  "application/x-www-form-urlencoded",
 		"Accept":        "application/json",
 		"RqUID":         uuid.NewString(),
-		"Authorization": "Basic " + c.cfg.TokenAuthKey,
+		"Authorization": "Basic " + c.config.TokenAuthKey,
 	})
 	if err != nil {
 		return fmt.Errorf("http POST request: %w", err)

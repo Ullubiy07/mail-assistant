@@ -23,14 +23,17 @@ var (
 	ErrNotFoundUser  = errors.New("user not found")
 )
 
-type VectorStorer interface {
+type VectorStorage interface {
 	CreateCollection(ctx context.Context, collName string) error
-	DeleteCollection(ctx context.Context, collName string) error
 	Upsert(ctx context.Context, collName string, points []Point) error
 	Search(ctx context.Context, name string, embedding embed.Embedding) ([]ScoredPoint, error)
 }
 
-type UserStorer interface {
+type UserStorage interface {
 	CreateUser(ctx context.Context, user model.UserRegister) error
 	FindUserByUsername(ctx context.Context, username string) (model.User, error)
+}
+
+type MailStorage interface {
+	CreateFolderRecord(ctx context.Context, state mail.Folder) error
 }

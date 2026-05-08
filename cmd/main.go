@@ -16,13 +16,13 @@ import (
 )
 
 func main() {
-	cfg, err := config.New()
+	config, err := config.New()
 	if err != nil {
 		slog.Error("config new", "err", err)
 		os.Exit(1)
 	}
 
-	logger := logger.New(cfg.Log.Mode)
+	logger := logger.New(config.Log.Mode)
 	slog.SetDefault(logger)
 
 	ctx := context.Background()
@@ -38,7 +38,7 @@ func main() {
 	// }
 	// fmt.Println(len(letters), state)
 
-	app, err := app.New(&cfg.App)
+	app, err := app.New(config)
 	if err != nil {
 		slog.Error("Creating a new application", "error", fmt.Errorf("app new: %w", err))
 		os.Exit(1)

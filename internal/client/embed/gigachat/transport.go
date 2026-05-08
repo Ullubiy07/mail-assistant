@@ -10,7 +10,7 @@ type loggingWrapper struct {
 	tripper http.RoundTripper
 }
 
-func (w *loggingWrapper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (w loggingWrapper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	start := time.Now()
 	ctx := req.Context()

@@ -6,21 +6,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
 type Client struct {
 	client *http.Client
 }
 
-func New(timeout time.Duration, transport http.RoundTripper) *Client {
+func New(transport http.RoundTripper) Client {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	return &Client{
+	return Client{
 		client: &http.Client{
 			Transport: transport,
-			Timeout:   timeout,
 		},
 	}
 }

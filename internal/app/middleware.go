@@ -34,7 +34,7 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Add("X-Request-ID", requestId)
 	w.Header().Set("X-Request-ID", requestId)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	lrw := &LogResponseWriter{w, http.StatusOK}
 

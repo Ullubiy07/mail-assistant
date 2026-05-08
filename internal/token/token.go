@@ -1,8 +1,19 @@
 package token
 
-import "mail-assistant/internal/model"
+import (
+	"errors"
+	"mail-assistant/internal/model"
+)
 
-type TokenProducer interface {
+var (
+	ErrTokenExpired     = errors.New("token has expired")
+	ErrInvalidSignature = errors.New("signature mismatch")
+)
+
+type Generator interface {
 	Generate(user *model.UserToken) string
-	Verify(token string) bool
+}
+
+type Verifier interface {
+	Verify(token string) error
 }

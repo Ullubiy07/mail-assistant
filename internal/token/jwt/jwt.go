@@ -3,13 +3,16 @@ package jwt
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"fmt"
 	"strings"
+	"time"
 
 	"encoding/base64"
 	"encoding/json"
 
 	"mail-assistant/internal/config"
 	"mail-assistant/internal/model"
+	tokengen "mail-assistant/internal/token"
 )
 
 type Header struct {
@@ -17,23 +20,33 @@ type Header struct {
 	Typ string `json:"typ"`
 }
 
-type JWT struct {
+type JWTGenerator struct {
 	SecretKey string
 }
 
-func New(cfg *config.Token) JWT {
-	return JWT{
-		SecretKey: cfg.SecretKey,
+type JWTVerifier struct {
+	SecretKey string
+}
+
+func NewGenerator(config config.Token) JWTGenerator {
+	return JWTGenerator{
+		SecretKey: config.SecretKey,
 	}
 }
 
-func (t JWT) generateHMAC(msg []byte, secret string) string {
+func NewVerifier(config config.Token) JWTVerifier {
+	return JWTVerifier{
+		SecretKey: config.SecretKey,
+	}
+}
+
+func generateHMAC(msg []byte, secret string) string {
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(msg)
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-func (t JWT) Generate(user *model.UserToken) string {
+func (t JWTGenerator) Generate(user *model.UserToken) string {
 	headerJson, _ := json.Marshal(Header{
 		Alg: "HS256",
 		Typ: "JWT",
@@ -45,19 +58,33 @@ func (t JWT) Generate(user *model.UserToken) string {
 
 	to_sign := string(header) + "." + string(payload)
 
-	signature := t.generateHMAC([]byte(to_sign), t.SecretKey)
+	signature := generateHMAC([]byte(to_sign), t.SecretKey)
 
 	return to_sign + "." + signature
 }
 
-func (t JWT) Verify(token string) bool {
+func (t JWTVerifier) Verify(token string) error {
 	var section []string = strings.Split(token, ".")
 
 	to_sign := section[0] + "." + section[1]
-	signature := t.generateHMAC([]byte(to_sign), t.SecretKey)
+	user := model.UserToken{}
 
+	signature := generateHMAC([]byte(to_sign), t.SecretKey)
 	if signature != section[2] {
-		return false
+		return tokengen.ErrInvalidSignature
 	}
-	return true
+
+	payload, err := base64.RawURLEncoding.DecodeString(section[1])
+	if err != nil {
+		return fmt.Errorf("base64 decode payload: %w", err)
+	}
+	if err = json.Unmarshal(payload, &user); err != nil {
+		return fmt.Errorf("unmarshal payload into user: %w", err)
+	}
+
+	if time.Now().Before(time.Unix(user.ExpiredAt, 0)) {
+		return tokengen.ErrTokenExpired
+	}
+
+	return nil
 }

@@ -3,27 +3,26 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
-	"mail-assistant/internal/config"
 	"mail-assistant/internal/model"
 	"mail-assistant/internal/storage"
 	"mail-assistant/internal/token"
-	"mail-assistant/internal/token/jwt"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
-	storage storage.UserStorer
-	token   token.TokenProducer
-
-	cfg *config.Token
+	storage   storage.UserStorage
+	generator token.Generator
 }
 
-func NewAuthHandler(storage storage.UserStorer, cfg *config.Token) AuthHandler {
+func NewAuthHandler(storage storage.UserStorage, generator token.Generator) AuthHandler {
 	return AuthHandler{
-		storage: storage,
-		token:   jwt.New(cfg),
+		storage:   storage,
+		generator: generator,
 	}
 }
 
@@ -40,11 +39,20 @@ func (h AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	if err != nil {
+		slog.Error("generate hashed password", "error", err)
+		sendResponse(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	user.Password = string(hash)
+
 	if err := h.storage.CreateUser(r.Context(), user); err != nil {
 		if errors.Is(err, storage.ErrDublicateUser) {
 			sendResponse(w, http.StatusBadRequest, err.Error())
 		} else {
-			sendResponse(w, http.StatusInternalServerError, err.Error())
+			slog.Error("create user", "error", err)
+			sendResponse(w, http.StatusInternalServerError, "internal server error")
 		}
 		return
 	}
@@ -62,18 +70,17 @@ func (h AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userDB, err := h.storage.FindUserByUsername(r.Context(), user.Username)
-
 	if err != nil {
 		sendResponse(w, http.StatusNotFound, "invalid username or password")
 		return
-	} else if userDB.Password != user.Password {
+	} else if bcrypt.CompareHashAndPassword([]byte(userDB.Password), []byte(user.Password)) != nil {
 		sendResponse(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 
 	now := time.Now().Unix()
 
-	jwt := h.token.Generate(&model.UserToken{
+	jwt := h.generator.Generate(&model.UserToken{
 		ID:        userDB.ID,
 		Username:  userDB.Username,
 		Email:     userDB.Email,
