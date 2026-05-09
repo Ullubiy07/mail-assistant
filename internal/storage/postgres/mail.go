@@ -18,4 +18,3 @@ func NewMailStorage(db *pgxpool.Pool) MailStorage {
 func (s MailStorage) CreateFolderRecord(ctx context.Context, state mail.Folder) error {
 	return nil
 }
-

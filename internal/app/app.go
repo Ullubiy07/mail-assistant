@@ -27,16 +27,15 @@ type App struct {
 }
 
 func New(config *config.Config) (App, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	connUrl := fmt.Sprintf("postgres://%s:%s@%s:%d/postgres", config.Database.User, config.Database.Password, config.Database.Host, config.Database.Port)
-	db, err := pgxpool.New(context.TODO(), connUrl)
+	db, err := pgxpool.New(ctx, connUrl)
 	if err != nil {
 		return App{}, fmt.Errorf("new database pool: %w", err)
 	}
-	defer db.Close()
-	
+
 	if err = db.Ping(ctx); err != nil {
 		return App{}, fmt.Errorf("ping database: %w", err)
 	}
@@ -49,23 +48,24 @@ func New(config *config.Config) (App, error) {
 	imapFactory := imap.New(config.IMAP)
 	jwtGenerator := jwt.NewGenerator(config.Token)
 	jwtVerifier := jwt.NewVerifier(config.Token)
+	jwtExtractor := jwt.NewExtractor()
 
 	userStorage := postgres.NewUserStorage(db)
 	mailStorage := postgres.NewMailStorage(db)
 
 	auth := handler.NewAuthHandler(userStorage, jwtGenerator)
-	mail := handler.NewMailHandler(mailStorage, qdrantClient, imapFactory, gigachat, jwtVerifier)
+	mail := handler.NewMailHandler(mailStorage, qdrantClient, imapFactory, gigachat)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("POST /api/register", auth.Register)
-	mux.HandleFunc("POST /api/login", auth.Login)
-	mux.HandleFunc("POST /api/mail/ask", mail.Question)
+	mux.HandleFunc("POST /auth/register", auth.Register)
+	mux.HandleFunc("POST /auth/login", auth.Login)
+	mux.HandleFunc("POST /mail/ask", mail.Question)
 
 	app := App{
 		server: &http.Server{
 			Addr:         ":" + config.App.ServerPort,
-			Handler:      Middleware{handler: mux},
+			Handler:      handler.Middleware{Handler: mux, Verifier: jwtVerifier, Extractor: jwtExtractor},
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 10 * time.Second,
 		},
@@ -85,6 +85,7 @@ func (a *App) Run() error {
 
 func (a *App) Stop() error {
 	slog.Info("stopping server...")
+	a.db.Close()
 	if err := a.server.Close(); err != nil {
 		return fmt.Errorf("close server: %w", err)
 	}

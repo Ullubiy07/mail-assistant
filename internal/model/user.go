@@ -20,7 +20,7 @@ type UserLogin struct {
 	Password string `json:"password"`
 }
 
-type UserToken struct {
+type UserClaims struct {
 	ID        uuid.UUID `json:"id"`
 	Username  string    `json:"username"`
 	Email     string    `json:"email"`

@@ -19,4 +19,4 @@ CREATE TABLE mail_requests (
 );
 
 CREATE INDEX idx_mail
-ON mail_requests (user_id, address, folder);
+ON mail_requests (user_id, address);

@@ -11,9 +11,13 @@ var (
 )
 
 type Generator interface {
-	Generate(user *model.UserToken) string
+	Generate(user model.UserClaims) (string, error)
 }
 
 type Verifier interface {
 	Verify(token string) error
+}
+
+type Extractor interface {
+	Extract(token string) (model.UserClaims, error)
 }

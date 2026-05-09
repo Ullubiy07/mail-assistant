@@ -137,14 +137,14 @@ func (c Client) FetchFolders(ctx context.Context) ([]mail.Folder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collect command: %w", err)
 	}
-	result := make([]mail.Folder, 0, len(data))
-	for _, item := range data {
-		result = append(result, mail.Folder{
+	result := make([]mail.Folder, len(data))
+	for i, item := range data {
+		result[i] = mail.Folder{
 			Name:        item.Mailbox,
 			NumMessages: *item.Status.NumMessages,
 			UIDNext:     uint32(item.Status.UIDNext),
 			UIDValidity: item.Status.UIDValidity,
-		})
+		}
 	}
 	return result, nil
 }

@@ -1,5 +1,5 @@
 scrape_configs:
-  - job_name: 'mail-assistant'
+  - job_name: 'backend'
     scrape_interval: 15s
     scrape_timeout: 10s
     static_configs:
