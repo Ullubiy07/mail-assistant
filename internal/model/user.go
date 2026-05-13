@@ -21,7 +21,7 @@ type UserLogin struct {
 }
 
 type UserClaims struct {
-	ID        uuid.UUID `json:"id"`
+	Sub       uuid.UUID `json:"sub"`
 	Username  string    `json:"username"`
 	Email     string    `json:"email"`
 	IssuedAt  int64     `json:"iat"`

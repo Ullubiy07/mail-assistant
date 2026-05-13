@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	config, err := config.New()
+	config, err := config.New(".env")
 	if err != nil {
 		slog.Error("config new", "err", err)
 		os.Exit(1)

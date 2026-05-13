@@ -40,6 +40,14 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lrw := &LogResponseWriter{w, http.StatusOK}
+
+	requestId := uuid.NewString()
+	r.Header.Add("X-Request-ID", requestId)
+	w.Header().Set("X-Request-ID", requestId)
+
 	if !strings.HasPrefix(r.URL.Path, "/auth") {
 		jwt := strings.Split(r.Header.Get("Authorization"), "Bearer ")[1]
 		user, err := m.Extractor.Extract(jwt)
@@ -47,16 +55,8 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sendResponse(w, http.StatusInternalServerError, "Internal error")
 			return
 		}
-		slog.Info("debug", "user", user)
+		ctx = context.WithValue(ctx, "user_id", user.Sub)
 	}
-
-	requestId := uuid.NewString()
-	r.Header.Add("X-Request-ID", requestId)
-	w.Header().Set("X-Request-ID", requestId)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	lrw := &LogResponseWriter{w, http.StatusOK}
 
 	m.Handler.ServeHTTP(lrw, r.WithContext(ctx))
 

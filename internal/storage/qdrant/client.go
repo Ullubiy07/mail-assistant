@@ -38,14 +38,18 @@ func (c Client) Close() error {
 	return nil
 }
 
-func (c Client) Upsert(ctx context.Context, collName string, points []storage.Point) error {
+func (c Client) Insert(ctx context.Context, collName string, points []storage.Point) error {
 	if len(points) > 0 && len(points[0].Embedding) != c.config.EmbeddingSize {
 		return fmt.Errorf("embedding size does`t match the collection dimension")
 	}
+	if len(points) == 0 {
+		return nil
+	}
+	
 	qdrantPoints := make([]*qdrant.PointStruct, len(points))
 
 	for i := range points {
-		raw, err := json.Marshal(*points[i].Payload)
+		raw, err := json.Marshal(points[i].Payload)
 		if err != nil {
 			return fmt.Errorf("marshal point payload: %w", err)
 		}
@@ -62,6 +66,7 @@ func (c Client) Upsert(ctx context.Context, collName string, points []storage.Po
 	_, err := c.client.Upsert(ctx, &qdrant.UpsertPoints{
 		CollectionName: collName,
 		Points:         qdrantPoints,
+		UpdateMode:     qdrant.UpdateMode_InsertOnly.Enum(),
 	})
 	if err != nil {
 		return fmt.Errorf("upsert query: %w", err)
@@ -96,7 +101,15 @@ func (c Client) Search(ctx context.Context, collName string, embedding embed.Emb
 }
 
 func (c Client) CreateCollection(ctx context.Context, collName string) error {
-	err := c.client.CreateCollection(ctx, &qdrant.CreateCollection{
+	exist, err := c.client.CollectionExists(ctx, collName)
+	if err != nil {
+		return fmt.Errorf("check collection existence: %w", err)
+	}
+	if exist {
+		return nil
+	}
+
+	err = c.client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     uint64(c.config.EmbeddingSize),
@@ -105,14 +118,6 @@ func (c Client) CreateCollection(ctx context.Context, collName string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
-	}
-	return nil
-}
-
-func (c Client) DeleteCollection(ctx context.Context, collName string) error {
-	err := c.client.DeleteCollection(ctx, collName)
-	if err != nil {
-		return fmt.Errorf("delete collection: %w", err)
 	}
 	return nil
 }

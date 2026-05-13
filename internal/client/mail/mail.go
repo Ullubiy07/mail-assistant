@@ -25,24 +25,20 @@ type Letter struct {
 
 type Folder struct {
 	Name        string
-	NumMessages uint32
 	UIDNext     uint32
 	UIDValidity uint32
 }
 
-type Creds struct {
+type Auth struct {
 	Email    string
 	Password string
 	Token    string
-}
-
-type Auth struct {
-	Address string
-	Method  string
+	Address  string
+	Method   string
 }
 
 type FetcherFactory interface {
-	NewFetcher(creds Creds, auth Auth) Fetcher
+	NewFetcher(auth Auth) Fetcher
 }
 
 type Fetcher interface {

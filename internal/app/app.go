@@ -24,6 +24,7 @@ import (
 type App struct {
 	server *http.Server
 	db     *pgxpool.Pool
+	vector qdrant.Client
 }
 
 func New(config *config.Config) (App, error) {
@@ -40,7 +41,7 @@ func New(config *config.Config) (App, error) {
 		return App{}, fmt.Errorf("ping database: %w", err)
 	}
 
-	qdrantClient, err := qdrant.New(config.Qdrant)
+	qdrant, err := qdrant.New(config.Qdrant)
 	if err != nil {
 		return App{}, fmt.Errorf("qdrant new client: %w", err)
 	}
@@ -54,7 +55,7 @@ func New(config *config.Config) (App, error) {
 	mailStorage := postgres.NewMailStorage(db)
 
 	auth := handler.NewAuthHandler(userStorage, jwtGenerator)
-	mail := handler.NewMailHandler(mailStorage, qdrantClient, imapFactory, gigachat)
+	mail := handler.NewMailHandler(mailStorage, qdrant, imapFactory, gigachat)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -69,7 +70,8 @@ func New(config *config.Config) (App, error) {
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 10 * time.Second,
 		},
-		db: db,
+		db:     db,
+		vector: qdrant,
 	}
 
 	return app, nil
@@ -86,6 +88,9 @@ func (a *App) Run() error {
 func (a *App) Stop() error {
 	slog.Info("stopping server...")
 	a.db.Close()
+	if err := a.vector.Close(); err != nil {
+		return fmt.Errorf("close connection to vector storage: %w", err)
+	}
 	if err := a.server.Close(); err != nil {
 		return fmt.Errorf("close server: %w", err)
 	}

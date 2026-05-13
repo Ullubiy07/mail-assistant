@@ -17,7 +17,7 @@ type IMAP struct {
 	LetterCharsLimit int    `env:"LETTER_CHARS_LIMIT"`
 	FolderCharsLimit int    `env:"FOLDER_CHARS_LIMIT"`
 	DialTimeout      int    `env:"DIAL_TIMEOUT"`
-	MaxConnections   uint32 `env:"MAX_CONNECTIONS"`
+	MaxConnections   int    `env:"MAX_CONNECTIONS"`
 }
 
 type Qdrant struct {
@@ -56,8 +56,8 @@ type Config struct {
 	Token     Token
 }
 
-func New() (*Config, error) {
-	if err := godotenv.Load(); err != nil {
+func New(envPath string) (*Config, error) {
+	if err := godotenv.Load(envPath); err != nil {
 		return nil, err
 	}
 

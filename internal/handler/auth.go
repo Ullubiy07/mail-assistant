@@ -69,7 +69,7 @@ func (h AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userDB, err := h.storage.FindUserByUsername(r.Context(), user.Username)
+	userDB, err := h.storage.GetUserByUsername(r.Context(), user.Username)
 	if err != nil {
 		sendResponse(w, http.StatusNotFound, "Invalid username or password")
 		return
@@ -81,7 +81,7 @@ func (h AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	jwt, err := h.generator.Generate(model.UserClaims{
-		ID:        userDB.ID,
+		Sub:        userDB.ID,
 		Username:  userDB.Username,
 		Email:     userDB.Email,
 		IssuedAt:  now,

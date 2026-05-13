@@ -38,7 +38,7 @@ func New(config config.Embedding) *Client {
 
 func (c *Client) Embed(ctx context.Context, chunks []embed.Chunk) ([]embed.Embedding, error) {
 	if len(chunks) == 0 {
-		return nil, fmt.Errorf("empty chunks")
+		return nil, nil
 	}
 
 	body, err := json.Marshal(embeddingRequest{"Embeddings", chunks})

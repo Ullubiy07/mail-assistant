@@ -10,7 +10,6 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -39,7 +38,6 @@ type Factory struct {
 
 type Client struct {
 	config config.IMAP
-	creds  mail.Creds
 	auth   mail.Auth
 }
 
@@ -52,10 +50,9 @@ func New(config config.IMAP) Factory {
 	return Factory{config: config}
 }
 
-func (f Factory) NewFetcher(creds mail.Creds, auth mail.Auth) mail.Fetcher {
+func (f Factory) NewFetcher(auth mail.Auth) mail.Fetcher {
 	return Client{
 		config: f.config,
-		creds:  creds,
 		auth:   auth,
 	}
 }
@@ -88,7 +85,7 @@ func (c Client) authenticate(conn *imapclient.Client) error {
 }
 
 func (c Client) authenticateByPassword(conn *imapclient.Client) error {
-	if err := conn.Login(c.creds.Email, c.creds.Password).Wait(); err != nil {
+	if err := conn.Login(c.auth.Email, c.auth.Password).Wait(); err != nil {
 		return fmt.Errorf("login attempt: %w", err)
 	}
 	return nil
@@ -96,8 +93,8 @@ func (c Client) authenticateByPassword(conn *imapclient.Client) error {
 
 func (c Client) authenticateByXOAUTH2(conn *imapclient.Client) error {
 	authClient := &clientXOAUTH2{
-		email: c.creds.Email,
-		token: c.creds.Token,
+		email: c.auth.Email,
+		token: c.auth.Token,
 	}
 	if err := conn.Authenticate(authClient); err != nil {
 		return fmt.Errorf("authentication attempt: %w", err)
@@ -116,21 +113,18 @@ func (c *clientXOAUTH2) Next(challenge []byte) (response []byte, err error) {
 }
 
 func (c Client) FetchFolders(ctx context.Context) ([]mail.Folder, error) {
-	conn, err := c.connect(ctx)
+	conns, err := c.createConnections(ctx, c.config.MaxConnections)
 	if err != nil {
-		return nil, fmt.Errorf("connect to IMAP: %w", err)
-	}
-	var once sync.Once
-	connClose := func() { once.Do(func() { conn.Close() }) }
-	stop := watchClose(ctx, connClose)
-	defer stop()
-	defer connClose()
-
-	if err := c.authenticate(conn); err != nil {
-		return nil, fmt.Errorf("authenticate to IMAP server: %w", err)
+		return nil, fmt.Errorf("create connections: %w", err)
 	}
 
-	cmd := conn.List("", "*", &imap.ListOptions{ReturnStatus: &imap.StatusOptions{NumMessages: true, UIDNext: true, UIDValidity: true}})
+	defer func() {
+		for _, conn := range conns {
+			conn.Close()
+		}
+	}()
+	
+	cmd := conns[0].List("", "*", &imap.ListOptions{ReturnStatus: &imap.StatusOptions{UIDNext: true, UIDValidity: true}})
 	defer cmd.Close()
 
 	data, err := cmd.Collect()
@@ -141,7 +135,6 @@ func (c Client) FetchFolders(ctx context.Context) ([]mail.Folder, error) {
 	for i, item := range data {
 		result[i] = mail.Folder{
 			Name:        item.Mailbox,
-			NumMessages: *item.Status.NumMessages,
 			UIDNext:     uint32(item.Status.UIDNext),
 			UIDValidity: item.Status.UIDValidity,
 		}
@@ -150,22 +143,16 @@ func (c Client) FetchFolders(ctx context.Context) ([]mail.Folder, error) {
 }
 
 func (c Client) FetchNewLetters(ctx context.Context, folder string, uid uint32) ([]mail.Letter, error) {
-	conns, err := c.createConnections(ctx)
+	conns, err := c.createConnections(ctx, int(c.config.MaxConnections))
 	if err != nil {
 		return nil, fmt.Errorf("create connections: %w", err)
 	}
 
-	var once sync.Once
-	connClose := func() {
-		once.Do(func() {
-			for _, conn := range conns {
-				conn.Close()
-			}
-		})
-	}
-	stop := watchClose(ctx, connClose)
-	defer stop()
-	defer connClose()
+	defer func() {
+		for _, conn := range conns {
+			conn.Close()
+		}
+	}()
 
 	type response struct {
 		letters []mail.Letter
@@ -202,14 +189,14 @@ func (c Client) FetchNewLetters(ctx context.Context, folder string, uid uint32) 
 			stop = stopSeq
 		}
 
-		go func(start, stop uint32, conn *imapclient.Client) {
-			res, length, err := c.getLetters(conn, folder, start, stop)
+		go func() {
+			res, length, err := c.getLetters(conns[i], folder, start, stop)
 			if err != nil {
 				chErr <- fmt.Errorf("get letters from %s: %w", folder, err)
 				return
 			}
 			chRes <- response{res, length}
-		}(start, stop, conns[i])
+		}()
 	}
 
 	totalChars := 0
@@ -234,10 +221,10 @@ func (c Client) FetchNewLetters(ctx context.Context, folder string, uid uint32) 
 	return result, nil
 }
 
-func (c Client) createConnections(ctx context.Context) ([]*imapclient.Client, error) {
-	conns := make([]*imapclient.Client, 0, c.config.MaxConnections)
+func (c Client) createConnections(ctx context.Context, num int) ([]*imapclient.Client, error) {
+	conns := make([]*imapclient.Client, 0, num)
 
-	for range c.config.MaxConnections {
+	for range num {
 		conn, err := c.connect(ctx)
 		if err != nil {
 			continue
@@ -412,16 +399,4 @@ func inBlackList(mailbox string) bool {
 		strings.Contains(mailbox, "no-reply") ||
 		strings.Contains(mailbox, "devnull") ||
 		strings.Contains(mailbox, "robot")
-}
-
-func watchClose(ctx context.Context, closeConn func()) (stop func()) {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			closeConn()
-		case <-done:
-		}
-	}()
-	return func() { close(done) }
 }
