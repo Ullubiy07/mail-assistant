@@ -15,32 +15,48 @@ services:
       timeout: 5s
       retries: 2
   
-  postgres:
+  db:
     image: postgres:alpine3.22
     ports:
-      - 5433:5432
+      - ${DB_PORT}:${DB_PORT}
     restart: on-failure
     environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./db-init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 2
   
-  backend:
-    build: .
+  auth-service:
+    build:
+      context: ./backend
+      dockerfile: auth/Dockerfile
     ports:
-      - 8080:8080
+      - ${AUTH_SERVER_PORT}:${AUTH_SERVER_PORT}
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+  
+  mail-service:
+    build:
+      context: ./backend
+      dockerfile: mail/Dockerfile
+    ports:
+      - ${MAIL_SERVER_PORT}:${MAIL_SERVER_PORT}
+    env_file:
+      - .env
     depends_on:
       qdrant:
         condition: service_healthy
-      postgres:
+      db:
         condition: service_healthy
 
   # monitoring
