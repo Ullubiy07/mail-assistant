@@ -51,11 +51,12 @@ func New(config *config.Config) (App, error) {
 
 	mailStorage := postgres.NewMailStorage(db)
 
-	mail := handler.NewMailHandler(mailStorage, qdrant, imapFactory, gigachatLLM, gigachatEmbedder)
+	mail := handler.NewMailHandler(mailStorage, qdrant, imapFactory, gigachatLLM, gigachatEmbedder, config.IMAP)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("POST /mail/ask", mail.Question)
+	mux.HandleFunc("POST /mail/ask", mail.AnswerQuestion)
+	mux.HandleFunc("POST /mail/folders", mail.GetFolders)
 
 	app := App{
 		server: &http.Server{

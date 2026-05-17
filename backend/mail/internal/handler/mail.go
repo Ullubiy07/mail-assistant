@@ -13,6 +13,8 @@ import (
 	"backend/mail/internal/client/embed"
 	"backend/mail/internal/client/imap"
 	"backend/mail/internal/client/llm"
+	"backend/mail/internal/config"
+	"backend/mail/internal/model"
 	"backend/mail/internal/storage"
 )
 
@@ -22,31 +24,22 @@ type MailHandler struct {
 	factory imap.FetcherFactory
 	llm     llm.Generator
 	model   embed.Embedder
+
+	imapConfig config.IMAP
 }
 
-func NewMailHandler(storage storage.MailStorage, vector storage.VectorStorage, factory imap.FetcherFactory, llm llm.Generator, model embed.Embedder) MailHandler {
+func NewMailHandler(storage storage.MailStorage, vector storage.VectorStorage, factory imap.FetcherFactory, llm llm.Generator, model embed.Embedder, config config.IMAP) MailHandler {
 	return MailHandler{
-		storage: storage,
-		vector:  vector,
-		factory: factory,
-		llm:     llm,
-		model:   model,
+		storage:    storage,
+		vector:     vector,
+		factory:    factory,
+		llm:        llm,
+		model:      model,
+		imapConfig: config,
 	}
 }
 
-type QuestionRequst struct {
-	Address  string   `json:"address"`
-	Email    string   `json:"email"`
-	Password string   `json:"password"`
-	Folders  []string `json:"folders"`
-	Question string   `json:"question"`
-}
-
-type QuestionResponse struct {
-	Message string `json:"msg"`
-}
-
-func (h MailHandler) Question(w http.ResponseWriter, r *http.Request) {
+func (h MailHandler) AnswerQuestion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
 	if _, ok := r.Context().Value("user_id").(uuid.UUID); !ok {
@@ -55,33 +48,80 @@ func (h MailHandler) Question(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := QuestionRequst{}
+	req := model.QuestionRequst{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendResponse(w, http.StatusBadRequest, "Wrong request structure")
 		return
 	}
 
-	answer, err := h.runRAGPipeline(r.Context(), req)
+	auth := imap.Auth{Email: req.Email, Password: req.Password, Token: "", Address: req.Address, Method: "PLAIN"}
+	fetcher, err := h.factory.NewFetcher(r.Context(), auth, nil)
 	if err != nil {
-		slog.Error("RAG pipeline", "error", err)
+		handleNewFetcherError(w, err)
+		return
+	}
+	defer fetcher.Close()
+
+	answer, err := h.runRAGPipeline(r.Context(), req, fetcher)
+	if err != nil {
+		slog.Error("run RAG pipeline", "error", err)
 		sendResponse(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	w.Write([]byte(answer))
 
-	// resp := QuestionResponse{}
-	// rawResp, err := json.Marshal(resp)
-	// if err != nil {
-	// 	slog.Error("marshal question response", "error", err)
-	// 	sendResponse(w, http.StatusInternalServerError, "internal error")
-	// 	return
-	// }
-
-	// w.Write(rawResp)
+	raw, err := json.Marshal(model.QuestionResponse{Content: answer})
+	if err != nil {
+		slog.Error("marshal question response", "error", err)
+		sendResponse(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	w.Write(raw)
 }
 
-func (h MailHandler) runRAGPipeline(ctx context.Context, req QuestionRequst) (string, error) {
-	if err := h.index(ctx, req); err != nil {
+func (h MailHandler) GetFolders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "application/json")
+
+	if _, ok := r.Context().Value("user_id").(uuid.UUID); !ok {
+		slog.Error("no user_id provided in context")
+		sendResponse(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+
+	req := model.GetFoldersRequest{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendResponse(w, http.StatusBadRequest, "Wrong request structure")
+		return
+	}
+
+	config := h.imapConfig
+	config.MaxConnections = 1
+	auth := imap.Auth{Email: req.Email, Password: req.Password, Token: "", Address: req.Address, Method: "PLAIN"}
+
+	fetcher, err := h.factory.NewFetcher(r.Context(), auth, &config)
+	if err != nil {
+		handleNewFetcherError(w, err)
+		return
+	}
+	defer fetcher.Close()
+
+	folders, err := fetcher.FetchFolders(r.Context())
+	if err != nil {
+		slog.Error("fetch folders", "error", err)
+		sendResponse(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+
+	raw, err := json.Marshal(model.GetFoldersResponse{Folders: folders})
+	if err != nil {
+		slog.Error("marshal get folders response", "error", err)
+		sendResponse(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	w.Write(raw)
+}
+
+func (h MailHandler) runRAGPipeline(ctx context.Context, req model.QuestionRequst, fetcher imap.Fetcher) (string, error) {
+	if err := h.index(ctx, req, fetcher); err != nil {
 		return "", fmt.Errorf("stage - indexing: %w", err)
 	}
 
@@ -97,22 +137,12 @@ func (h MailHandler) runRAGPipeline(ctx context.Context, req QuestionRequst) (st
 	return answer, nil
 }
 
-func (h MailHandler) index(ctx context.Context, req QuestionRequst) error {
+func (h MailHandler) index(ctx context.Context, req model.QuestionRequst, fetcher imap.Fetcher) error {
 	// fetch new letters from mail server
-	auth := imap.Auth{
-		Email:    req.Email,
-		Password: req.Password,
-		Token:    "",
-		Address:  req.Address,
-		Method:   "PLAIN",
-	}
-	userID := ctx.Value("user_id").(uuid.UUID)
-	fetcher, err := h.factory.NewFetcher(ctx, auth)
-	if err != nil {
-		return fmt.Errorf("new fetcher: %w", err)
-	}
 	defer fetcher.Close()
 
+	userID := ctx.Value("user_id").(uuid.UUID)
+	
 	folders, err := fetcher.FetchFolders(ctx)
 	if err != nil {
 		return fmt.Errorf("get folders from mailbox: %w", err)
@@ -154,7 +184,7 @@ func (h MailHandler) index(ctx context.Context, req QuestionRequst) error {
 	return nil
 }
 
-func (h MailHandler) retrieve(ctx context.Context, req QuestionRequst) ([]storage.ScoredPoint, error) {
+func (h MailHandler) retrieve(ctx context.Context, req model.QuestionRequst) ([]storage.ScoredPoint, error) {
 	questionVector, err := h.model.Embed(ctx, []string{req.Question})
 	if err != nil {
 		return nil, fmt.Errorf("embed question chunk: %w", err)
@@ -168,7 +198,7 @@ func (h MailHandler) retrieve(ctx context.Context, req QuestionRequst) ([]storag
 	return scored, nil
 }
 
-func (h MailHandler) generate(ctx context.Context, req QuestionRequst, scored []storage.ScoredPoint) (string, error) {
+func (h MailHandler) generate(ctx context.Context, req model.QuestionRequst, scored []storage.ScoredPoint) (string, error) {
 	resp, err := h.llm.Generate(ctx, req.Question, scored)
 	if err != nil {
 		return "", fmt.Errorf("generate llm response: %w", err)
@@ -179,7 +209,7 @@ func (h MailHandler) generate(ctx context.Context, req QuestionRequst, scored []
 	return resp, nil
 }
 
-func (h MailHandler) collectNewLetters(ctx context.Context, req QuestionRequst, fetcher imap.Fetcher, folders []imap.Folder) ([]imap.Letter, error) {
+func (h MailHandler) collectNewLetters(ctx context.Context, req model.QuestionRequst, fetcher imap.Fetcher, folders []imap.Folder) ([]imap.Letter, error) {
 	userID := ctx.Value("user_id").(uuid.UUID)
 
 	foldersDB, err := h.storage.GetFolders(ctx, userID, req.Email)
@@ -220,4 +250,17 @@ func (h MailHandler) collectNewLetters(ctx context.Context, req QuestionRequst, 
 		}
 	}
 	return letters, nil
+}
+
+func handleNewFetcherError(w http.ResponseWriter, err error) {
+	if err != nil {
+		if errors.Is(err, imap.ErrAppPasswordRequired) {
+			sendResponse(w, http.StatusUnprocessableEntity, imap.ErrAppPasswordRequired.Error())
+		} else if errors.Is(err, imap.ErrAuthenticationFailed) {
+			sendResponse(w, http.StatusUnprocessableEntity, imap.ErrAuthenticationFailed.Error())
+		} else {
+			slog.Error("new fetcher", "error", err)
+			sendResponse(w, http.StatusInternalServerError, "Internal error")
+		}
+	}
 }

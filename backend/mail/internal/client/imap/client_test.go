@@ -22,7 +22,7 @@ func TestFetchNewLetters(t *testing.T) {
 		Password: "",
 		Token:    "",
 	}
-	fetcher, err := factory.NewFetcher(ctx, auth)
+	fetcher, err := factory.NewFetcher(ctx, auth, nil)
 	require.NoError(t, err, "new fetcher")
 	defer fetcher.Close()
 

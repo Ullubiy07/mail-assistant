@@ -42,8 +42,12 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	m.Handler.ServeHTTP(lrw, r.WithContext(ctx))
 
-	slog.Info("HTTP request", "method", r.Method, "path", r.URL.Path, "status", lrw.statusCode, "request_id", requestId)
-
+	if lrw.statusCode >= 500 {
+		slog.Error("HTTP request", "method", r.Method, "path", r.URL.Path, "status", lrw.statusCode, "request_id", requestId)
+	} else {
+		slog.Info("HTTP request", "method", r.Method, "path", r.URL.Path, "status", lrw.statusCode, "request_id", requestId)
+	}
+	
 	metrics.HttpRequestByPath.WithLabelValues(r.URL.Path).Inc()
 	metrics.HttpRequestDuration.WithLabelValues(r.Method + " " + r.URL.Path)
 }

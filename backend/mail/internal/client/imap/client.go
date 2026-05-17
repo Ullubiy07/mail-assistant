@@ -32,7 +32,7 @@ var (
 )
 
 type Factory struct {
-	config config.IMAP
+	defaultConfig config.IMAP
 }
 
 type Client struct {
@@ -57,15 +57,19 @@ func (c *clientXOAUTH2) Next(challenge []byte) (response []byte, err error) {
 }
 
 func New(config config.IMAP) Factory {
-	return Factory{config: config}
+	return Factory{defaultConfig: config}
 }
 
-func (f Factory) NewFetcher(ctx context.Context, auth Auth) (Fetcher, error) {
+func (f Factory) NewFetcher(ctx context.Context, auth Auth, config *config.IMAP) (Fetcher, error) {
+	cfg := f.defaultConfig
+	if config != nil {
+		cfg = *config
+	}
 	client := &Client{
-		config: f.config,
+		config: cfg,
 		auth:   auth,
 	}
-	if err := client.createConnections(ctx, f.config.MaxConnections); err != nil {
+	if err := client.createConnections(ctx, cfg.MaxConnections); err != nil {
 		return nil, fmt.Errorf("create connections: %w", err)
 	}
 	return client, nil
@@ -167,7 +171,9 @@ func (c *Client) FetchNewLetters(ctx context.Context, folder string, uid uint32)
 func (c *Client) Close() error {
 	var err error
 	for i := range c.conns {
-		err = c.conns[i].Close()
+		if c.conns[i] != nil {
+			err = c.conns[i].Close()
+		}
 	}
 	return err
 }
@@ -214,6 +220,10 @@ func (c *Client) connect(ctx context.Context) (*imapclient.Client, error) {
 }
 
 func (c *Client) authenticate(ctx context.Context, conn *imapclient.Client) error {
+	if conn == nil {
+		return fmt.Errorf("connection is nil")
+	}
+
 	switch c.auth.Method {
 	case XOAUTH2:
 		return c.authenticateByXOAUTH2(ctx, conn)
@@ -233,7 +243,13 @@ func (c *Client) authenticateByPassword(ctx context.Context, conn *imapclient.Cl
 	})
 
 	if err != nil {
-		return fmt.Errorf("login attempt: %w", err)
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "application password") {
+			err = ErrAppPasswordRequired
+		} else if strings.Contains(errStr, "authentication") {
+			err = ErrAuthenticationFailed
+		}
+		return fmt.Errorf("execute block command: %w", err)
 	}
 	return nil
 }
